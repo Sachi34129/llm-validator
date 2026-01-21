@@ -1,0 +1,2 @@
+Your output violated the required JSON schema.
+Return ONLY valid JSON with exactly these keys: is_valid, errors, warnings.

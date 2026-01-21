@@ -1,0 +1,153 @@
+description: "LLM Validator Evaluation"
+
+# Reduce concurrency to avoid memory issues
+options:
+  maxConcurrency: 1  # Run one test at a time
+
+prompts:
+  - |
+    You are a validation engine. Return ONLY JSON: {"is_valid": boolean, "errors": string[], "warnings": string[]}
+
+    VALIDATE ONLY FIELDS THAT EXIST (ignore missing/null):
+
+    ERRORS (set is_valid=false):
+    1. name = "" → error: "name must be non-empty"
+    2. email invalid (no @ or bad format) → error: "email must be a valid email address"  
+    3. age <= 0 → error: "age must be a positive number"
+    4. country NOT 2 uppercase letters → error: "country must be exactly 2 uppercase letters" (USA is 3 letters = ERROR)
+    5. phone NOT E.164 (+ then 8-15 digits) → error: "phone must be in E.164 format" (12345 has no + = ERROR)
+
+    WARNINGS (is_valid stays true):
+    - age < 18 → warning: "age is below 18" (16 is valid but gets warning)
+    - name length < 3 → warning: "name length is less than 3" (Bo is 2 chars = warning)
+    - disposable email → warning: "email uses a disposable or temporary email provider"
+
+    KEY POINTS:
+    - age 16 is POSITIVE (valid) but gets WARNING, NOT error
+    - name "Bo" (2 chars) gets WARNING, NOT error
+    - country "USA" (3 letters) is ERROR
+    - phone "12345" (no +) is ERROR
+    - errors/warnings are string arrays: ["text"], never objects
+
+    EXACT EXAMPLES:
+    Input: {"name": "Aarav Patel", "email": "aarav.patel@gmail.com", "age": 24, "country": "IN", "phone": "+919876543210"}
+    Output: {"is_valid": true, "errors": [], "warnings": []}
+
+    Input: {"country": "USA", "phone": "+14155550100", "age": 25}
+    Output: {"is_valid": false, "errors": ["country must be exactly 2 uppercase letters"], "warnings": []}
+
+    Input: {"phone": "12345", "age": 25}
+    Output: {"is_valid": false, "errors": ["phone must be in E.164 format"], "warnings": []}
+
+    Input: {"name": "Bo", "age": 25, "email": "bo@example.com", "country": "US", "phone": "+14155550100"}
+    Output: {"is_valid": true, "errors": [], "warnings": ["name length is less than 3"]}
+
+    Input: {"name": "Kid", "age": 16, "email": "kid@example.com", "country": "US", "phone": "+14155550100"}
+    Output: {"is_valid": true, "errors": [], "warnings": ["age is below 18"]}
+
+    Input: {"name": "", "email": "bad-email"}
+    Output: {"is_valid": false, "errors": ["name must be non-empty", "email must be a valid email address"], "warnings": []}
+
+    User Input:
+    {{input}}
+
+# Ollama (local) - using llama3.1:8b with reduced concurrency to avoid memory issues
+providers:
+  - id: openai:chat:llama3.1:8b
+    config:
+      apiBaseUrl: http://localhost:11434/v1
+      apiKey: ollama
+      temperature: 0.0
+      response_format:
+        type: json_object
+
+# Alternative: Gemini API - uncomment to use instead of Ollama
+# Make sure GEMINI_API_KEY is set in your environment
+# providers:
+#   - id: google:gemini:gemini-1.5-flash
+#     config:
+#       apiKey: ${GEMINI_API_KEY}
+#       temperature: 0.0
+#       responseMimeType: application/json
+
+tests:
+  - description: "Valid User"
+    vars:
+      input: '{"name": "Aarav Patel", "email": "aarav.patel@gmail.com", "age": 24, "country": "IN", "phone": "+919876543210"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === true && res.errors.length === 0 && res.warnings.length === 0;
+
+  - description: "Invalid: Missing Name"
+    vars:
+      input: '{"email": "user@example.com", "age": 25, "country": "US", "phone": "+14155550100"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === true && res.errors.length === 0;
+
+  - description: "Invalid: Bad Email"
+    vars:
+      input: '{"name": "John", "email": "not-an-email", "age": 25, "country": "US", "phone": "+14155550100"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === false && res.errors.some(e => e.toLowerCase().includes('email'));
+
+  - description: "Invalid: Negative Age"
+    vars:
+      input: '{"name": "John", "email": "john@example.com", "age": -5, "country": "US", "phone": "+14155550100"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === false && res.errors.some(e => e.toLowerCase().includes('age'));
+
+  - description: "Invalid: Bad Country Code"
+    vars:
+      input: '{"name": "John", "email": "john@example.com", "age": 25, "country": "USA", "phone": "+14155550100"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === false && res.errors.some(e => e.toLowerCase().includes('country'));
+
+  - description: "Invalid: Bad Phone Format"
+    vars:
+      input: '{"name": "John", "email": "john@example.com", "age": 25, "country": "US", "phone": "12345"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === false && res.errors.some(e => e.toLowerCase().includes('phone'));
+
+  - description: "Warning: Underage"
+    vars:
+      input: '{"name": "Kid", "email": "kid@example.com", "age": 16, "country": "US", "phone": "+14155550100"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === true && res.errors.length === 0 && res.warnings.some(w => w.toLowerCase().includes('age'));
+
+  - description: "Warning: Short Name"
+    vars:
+      input: '{"name": "Bo", "email": "bo@example.com", "age": 25, "country": "US", "phone": "+14155550100"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === true && res.errors.length === 0 && res.warnings.some(w => w.toLowerCase().includes('name'));
+
+  - description: "Complex Invalid: Multiple Errors"
+    vars:
+      input: '{"name": "", "email": "bad-email", "age": 25, "country": "US", "phone": "+14155550100"}'
+    assert:
+      - type: javascript
+        value: |
+          const res = typeof output === 'string' ? JSON.parse(output) : output;
+          return res.is_valid === false && res.errors.length >= 2;

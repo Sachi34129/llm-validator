@@ -155,6 +155,44 @@ python validate_user.py input.json
 npx promptfoo eval
 ```
 
+#### What happens when you run `npx promptfoo eval`
+
+1. Promptfoo loads **promptfooconfig.yaml** (in the project root).
+2. It builds one **prompt** from the `prompts:` block (with `{{input}}` as the variable).
+3. For each entry under **tests:** it substitutes `vars.input` into the prompt and calls the **provider** (e.g. Ollama `llama3.1:8b`).
+4. It runs the **assert** block (JavaScript) on each LLM output and marks the test pass/fail.
+5. It prints a summary (e.g. X passed, Y failed) and can write results to a file or web viewer.
+
+#### Where to change behavior and performance
+
+All eval behavior is in **promptfooconfig.yaml**:
+
+| What to change | Where in config | Effect |
+|----------------|-----------------|--------|
+| **Number of test cases** | `tests:` list | Add/remove/edit items; each item is one scenario (input + assertions). |
+| **Trials / repeat runs** | `options.repeat` | Run each test N times (default 1). Use 2+ to check stability. |
+| **Concurrency** | `options.maxConcurrency` | How many tests run in parallel (default 4; you have 1 to avoid memory issues). |
+| **Per-test timeout** | `options.timeoutMs` | Abort a test after this many ms (0 = no timeout). |
+| **Caching** | `options.cache` | Reuse cached LLM responses (default true). Set false to force fresh calls. |
+| **Provider / model** | `providers:` | Switch Ollama model or uncomment Gemini to use a different backend. |
+| **Prompt text** | `prompts:` | Same rules as your app; changing it here does not change `core/prompts` or `validate_user.py`. |
+
+**CLI overrides** (no need to edit YAML every time):
+
+```bash
+npx promptfoo eval --max-concurrency 2 --repeat 3
+npx promptfoo eval --filter-first-n 5          # run only first 5 tests
+npx promptfoo eval --filter-pattern "Invalid"   # run only tests whose description matches
+```
+
+**Adding or resetting test cases:** Edit the `tests:` section in **promptfooconfig.yaml**. Each test has:
+
+- `description`: short label (e.g. "Invalid: Bad Email").
+- `vars.input`: JSON string passed as `{{input}}` in the prompt.
+- `assert`: list of checks (e.g. `type: javascript` with a snippet that returns true/false).
+
+To add a test, append a new `- description: ...` block with `vars` and `assert`. To remove one, delete its block. To “reset” to a clean set, replace the `tests:` list with your desired list and save.
+
 ### Example
 
 **Input** (`input.json`):

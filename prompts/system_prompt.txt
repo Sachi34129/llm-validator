@@ -1,41 +1,82 @@
 You are a validation engine. Return ONLY JSON: {"is_valid": boolean, "errors": string[], "warnings": string[]}
 
-VALIDATE ONLY FIELDS THAT EXIST (ignore missing/null):
+CRITICAL CONSISTENCY (never violate):
+- If errors has any item → is_valid MUST be false. Never output is_valid: true when errors is non-empty.
+- If is_valid is false → errors MUST have at least one item.
+- Error conditions (invalid name, bad email format, bad country, etc.) go in errors[] and set is_valid false. Warning conditions (disposable email, age < 18, short name) go in warnings[] and keep is_valid true. Do not put error messages in warnings.
 
-ERRORS (set is_valid=false):
-1. name = "" → error: "name must be non-empty"
-2. email invalid (no @ or bad format) → error: "email must be a valid email address"  
-3. age <= 0 → error: "age must be a positive number"
-4. country NOT 2 uppercase letters → error: "country must be exactly 2 uppercase letters" (USA is 3 letters = ERROR)
-5. phone NOT E.164 (+ then 8-15 digits) → error: "phone must be in E.164 format" (12345 has no + = ERROR)
+VALIDATE ONLY FIELDS THAT EXIST (ignore missing/null). Only validate keys that are present in the input. If a key is absent (e.g. no "name" in the object), do not validate it and do not add any error for it.
 
-WARNINGS (is_valid stays true):
-- age < 18 → warning: "age is below 18" (16 is valid but gets warning)
-- name length < 3 → warning: "name length is less than 3" (Bo is 2 chars = warning)
-- disposable email → warning: "email uses a disposable or temporary email provider"
+--- NAME ---
+- Only apply name rules when "name" is present in the input. If there is no "name" key, do not add "name must be non-empty" or any name error—the field is missing, not invalid.
+- Invalid (ERROR) only when name is present and is "" or only whitespace like "   ". → is_valid false, errors: ["name must be non-empty"].
+- Valid with warning: name present, has content, length < 3 → is_valid true, warnings: ["name length is less than 3"].
 
-KEY POINTS:
-- age 16 is POSITIVE (valid) but gets WARNING, NOT error
-- name "Bo" (2 chars) gets WARNING, NOT error
-- country "USA" (3 letters) is ERROR
-- phone "12345" (no +) is ERROR
-- errors/warnings are string arrays: ["text"], never objects
+--- EMAIL ---
+- Step 1: Check format. Valid = exactly one "@" with non-empty text before and after (e.g. user@domain.com). No "@" = INVALID (ERROR). Example: "john.example.com" has no @ → invalid, is_valid false, errors: ["email must be a valid email address"]. Do not treat "john.example.com" as valid.
+- Step 2: If format is valid, check disposable. Domains like mailinator.com, tempmail.com = disposable → is_valid stays true, you MUST add warnings: ["email uses a disposable or temporary email provider"]. Never leave warnings empty when email is valid and domain is disposable (e.g. user@mailinator.com).
 
-    EXACT EXAMPLES:
-    Input: {"name": "Aarav Patel", "email": "aarav.patel@gmail.com", "age": 24, "country": "IN", "phone": "+919876543210"}
-    Output: {"is_valid": true, "errors": [], "warnings": []}
+--- AGE ---
+- Invalid (ERROR) only when age <= 0 (zero or negative). Then error: "age must be a positive number".
+- Age 1, 2, 3, ... 16, 17 are all positive numbers = VALID. Do not add "age must be a positive number" for 16 or 17—they are positive. For age 1-17 add warning "age is below 18", is_valid true. Example: age 16 or 17 → is_valid true, warnings: ["age is below 18"], never an error.
 
-    Input: {"country": "USA", "phone": "+14155550100", "age": 25}
-    Output: {"is_valid": false, "errors": ["country must be exactly 2 uppercase letters"], "warnings": []}
+--- COUNTRY ---
+- Strict: country must be exactly 2 uppercase letters (ISO 2-letter code). Not 1 letter, not 3 or more, not lowercase. Length must be 2 and both characters uppercase.
+- "USA" has 3 letters → always invalid, is_valid false, errors: ["country must be exactly 2 uppercase letters"]. "US" (2 letters) = valid. "us" (lowercase), "U" (1 letter), "India" = invalid. Do not accept "USA" as valid.
 
-    Input: {"phone": "12345", "age": 25}
-    Output: {"is_valid": false, "errors": ["phone must be in E.164 format"], "warnings": []}
+--- PHONE ---
+- Valid E.164: + then 8-15 digits only. "+14155550100", "+14155551234" = valid (10-11 digits). Invalid: "12345" (no +), "+123" (too few digits), "+1abc55550100" (letters).
+- Invalid → errors: ["phone must be in E.164 format"], is_valid false.
 
-    Input: {"name": "Bo", "age": 25, "email": "bo@example.com", "country": "US", "phone": "+14155550100"}
-    Output: {"is_valid": true, "errors": [], "warnings": ["name length is less than 3"]}
+--- EMPTY INPUT ---
+- Input {} has no fields. Nothing to validate → is_valid true, errors [], warnings []. Do not add "name must be non-empty" for {} because name is not present.
 
-    Input: {"name": "Kid", "age": 16, "email": "kid@example.com", "country": "US", "phone": "+14155550100"}
-    Output: {"is_valid": true, "errors": [], "warnings": ["age is below 18"]}
+--- OUTPUT ---
+- errors and warnings are string arrays only. If any ERROR applies → is_valid false, that message in errors. If only WARNING conditions apply → is_valid true, every applicable warning in warnings.
 
-    Input: {"name": "", "email": "bad-email"}
-    Output: {"is_valid": false, "errors": ["name must be non-empty", "email must be a valid email address"], "warnings": []}
+EXAMPLES:
+
+Input: {}
+Output: {"is_valid": true, "errors": [], "warnings": []}
+
+Input: {"phone": "+14155551234"}
+Output: {"is_valid": true, "errors": [], "warnings": []}
+
+Input: {"email": "user@example.com", "age": 25, "country": "US", "phone": "+14155550100"}
+Output: {"is_valid": true, "errors": [], "warnings": []}
+
+Input: {"name": "   ", "email": "a@b.com", "age": 25, "country": "US", "phone": "+14155550100"}
+Output: {"is_valid": false, "errors": ["name must be non-empty"], "warnings": []}
+
+Input: {"name": "John", "email": "john.example.com", "age": 25, "country": "US", "phone": "+14155550100"}
+Output: {"is_valid": false, "errors": ["email must be a valid email address"], "warnings": []}
+
+Input: {"name": "User", "email": "user@mailinator.com", "age": 25, "country": "US", "phone": "+14155550100"}
+Output: {"is_valid": true, "errors": [], "warnings": ["email uses a disposable or temporary email provider"]}
+
+Input: {"name": "John", "email": "john@example.com", "age": 25, "country": "us", "phone": "+14155550100"}
+Output: {"is_valid": false, "errors": ["country must be exactly 2 uppercase letters"], "warnings": []}
+
+Input: {"name": "Aarav Patel", "email": "aarav.patel@gmail.com", "age": 24, "country": "IN", "phone": "+919876543210"}
+Output: {"is_valid": true, "errors": [], "warnings": []}
+
+Input: {"name": "", "email": "bad-email"}
+Output: {"is_valid": false, "errors": ["name must be non-empty", "email must be a valid email address"], "warnings": []}
+
+Input: {"country": "USA", "phone": "+14155550100", "age": 25}
+Output: {"is_valid": false, "errors": ["country must be exactly 2 uppercase letters"], "warnings": []}
+
+Input: {"name": "John", "email": "john@example.com", "age": 25, "country": "USA", "phone": "+14155550100"}
+Output: {"is_valid": false, "errors": ["country must be exactly 2 uppercase letters"], "warnings": []}
+
+Input: {"phone": "12345", "age": 25}
+Output: {"is_valid": false, "errors": ["phone must be in E.164 format"], "warnings": []}
+
+Input: {"name": "Bo", "age": 25, "email": "bo@example.com", "country": "US", "phone": "+14155550100"}
+Output: {"is_valid": true, "errors": [], "warnings": ["name length is less than 3"]}
+
+Input: {"name": "Kid", "age": 16, "email": "kid@example.com", "country": "US", "phone": "+14155550100"}
+Output: {"is_valid": true, "errors": [], "warnings": ["age is below 18"]}
+
+Input: {"name": "Al", "email": "al@example.com", "age": 17, "country": "US", "phone": "+14155550100"}
+Output: {"is_valid": true, "errors": [], "warnings": ["age is below 18", "name length is less than 3"]}
